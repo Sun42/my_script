@@ -1,0 +1,145 @@
+#include <sys/cdefs.h>
+
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <sys/time.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <err.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <paths.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
+#include <libutil.h>
+#include "my_script.h"
+#include "my.h"
+#include "my_printf.h"
+
+/*
+** Lors du exit, est execute 2 fois, une fois pour kill le sousfils, une fois pour kill le fils? 
+*/
+void	finish(int signo)
+{
+  int	die;
+  int	pid;
+  int	status;
+  
+  die = 0;
+  /*
+  while ((pid = wait3((int *)&status, WNOHANG, 0)) > 0)
+    {
+      if (pid == child)
+	die = 1;
+    }
+  */
+  while ((pid = wait((int *)&status)) > 0)
+    {
+      if (pid == child)
+	die = 1;
+    }
+    if (die)
+      done();
+}
+
+/*
+** Process fils
+** lit dans le fd master et ecrit sur la sortie standard et le fichier
+*/
+void	dooutput()
+{
+  struct itimerval	value;
+  int			cc;
+  time_t		tvec;
+  char			obuf[BUFSIZ];
+
+  close(0);
+  tvec = time(NULL);
+  fprintf(fscript, "Script started on %s", ctime(&tvec));
+  signal(SIGALRM, scriptflush);
+  /*
+  value.it_interval.tv_sec = SECSPERMIN / 2;
+  value.it_interval.tv_usec = 0;
+  value.it_value = value.it_interval;
+  setitimer(ITIMER_REAL, &value, NULL);
+  */
+  while (1)
+    {
+      cc = read(master, obuf, sizeof(obuf));
+      if (cc <= 0)
+	break;
+      write(1, obuf, cc);
+      fwrite(obuf, 1, cc, fscript);
+      outcc += cc;
+    }
+  done();
+}
+
+/*
+** scriptflush nest pas toujours execute
+** force l'output dans le script si le signal SIGALRM est envoye au fils
+*/
+void	scriptflush(int signo)
+{
+  if (outcc) 
+    {
+      fflush(fscript);
+      outcc = 0;
+    }
+}
+
+/*
+** execute une seule fois par le sous fis
+*/
+void	doshell()
+{
+  char		*shell;
+
+  shell = getenv("SHELL");
+  if (shell == NULL)
+    shell = _PATH_BSHELL;
+  close(master);
+  fclose(fscript);
+  login_tty(slave);
+  execl(shell, shell, "-i", NULL);
+  warn("execl %s", shell);
+  fail();
+}
+
+/*
+** envoi le signal SIGTERM a tous les process dont l'id du groupe est egal au  groupid du sender
+*/
+void	fail()
+{
+  kill(0, SIGTERM);
+  done();
+}
+
+/*
+** Ecrit le time sur la sortie standard, dans le fichier et close le master
+*/
+void		done()
+{
+  time_t	tvec;
+
+  if (subchild)
+    {
+      tvec = time(NULL);
+      fprintf(fscript,"\nScript done on %s", ctime(&tvec));
+      fclose(fscript);
+      close(master);
+    } 
+  else 
+    {
+      tcsetattr(0, TCSAFLUSH, &tt);
+      my_printf("Script done, output file is %s\n", fname);
+    }
+  exit(0);
+}
